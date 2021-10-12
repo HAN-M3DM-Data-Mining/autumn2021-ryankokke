@@ -1,0 +1,198 @@
+---
+title: "Naive Bayes Assignment - Fake News Classification"
+author: 
+- Audrya Kerenhappukh - Author 
+- Ryan Kokke - Reviewer 
+
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: '2'
+    df_print: paged
+  html_notebook:
+    toc: yes
+    toc_depth: 2
+---
+
+
+```{r message=TRUE, warning = TRUE, include = FALSE}
+library(tidyverse)
+library(dplyr)
+library(wordcloud)
+library(tm)
+library(caret)
+library(e1071)
+library(readr)
+```
+
+## Business Understanding 
+Develop a machine learning program to identify when an article might be fake news
+
+## Import Document and Data Understanding 
+```{r message=TRUE, warning = TRUE, include = FALSE}
+
+url <- "https://raw.githubusercontent.com/HAN-M3DM-Data-Mining/assignments/master/datasets/NB-fakenews.csv"
+
+rawDF <- read_csv(url) %>% na.omit # Assign to new variable and elimate NaN values 
+
+
+```
+Because text could be really long we're trying to reduce the file size by making a new variable called 'author.title' 
+
+```{r}
+# Create a new data set with only two variables: 'label' and 'author.title', I have chosen to use the text and label columns and not the author, title and label columns as we want to predict is an article is reliable or not based on its contents. I halfed the dataset to 10000 samples to making computing easier. Also I missed a bit of background information about the dataset and its target and predictor variables.
+cleanDF <- rawDF[c(4,5)] %>% sample_n(10000)
+
+```
+
+
+The labels in the dataset are still numerical, we would want to factor them into "unreliable" and "reliable"
+
+```{r}
+
+cleanDF$label <- factor(cleanDF$label, levels = c(1,0), labels = c("unreliable", "reliable")) %>% relevel("reliable") #This seems fine
+
+```
+
+Visually inspect the data by creating worldclouds
+```{r message=TRUE, warning = FALSE, include = TRUE}
+unreliable <- cleanDF %>% 
+  filter(label == "unreliable")
+reliable <- cleanDF %>% 
+  filter(label == "reliable")
+
+wordcloud(unreliable$text, max.words = 30, scale = c(4, 0.8), colors= c("indianred1","indianred2","indianred3","indianred")) #When creating the clean dataframe authors and titles were picked out to be analyzed, this causes authors' names to be part of the wordcloud, is this is the wanted predictor variable then its fine, however it does still include NaN values
+
+wordcloud(reliable$text, max.words = 30, scale = c(4, 0.8), colors= c("lightsteelblue1","lightsteelblue2","lightsteelblue3","lightsteelblue"))
+```
+
+
+## Preparation 
+### Create corpus 
+
+First we need to create a corpus, which refers to a collection of text documents. In our case each is considered a text document
+
+#### Creating corpus for Training data 
+
+```{r}
+
+rawCorpus <- Corpus(VectorSource(cleanDF$text))
+
+```
+
+```{r warning=FALSE}
+cleanCorpus <- rawCorpus %>% tm_map(tolower) %>% tm_map(removeNumbers)
+cleanCorpus <- cleanCorpus %>% tm_map(tolower) %>% tm_map(removeWords, stopwords()) %>% tm_map(removePunctuation)
+```
+
+```{r warning=FALSE}
+cleanCorpus <- cleanCorpus %>% tm_map(stripWhitespace)
+
+#There are a couple of frequent symbols which were not cleaned up, we can get rid of them by using the tm package as well.
+
+tf = content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+cleanCorpus = tm_map(cleanCorpus, tf, "—")
+cleanCorpus = tm_map(cleanCorpus, tf, "’s")
+cleanCorpus = tm_map(cleanCorpus, tf, '“')
+cleanCorpus = tm_map(cleanCorpus, tf, '”')
+inspect(cleanCorpus[1])
+```
+See the difference between Raw vs Clean Corpus 
+```{r}
+tibble(Raw = rawCorpus$content[1:2], Clean = cleanCorpus$content[1:2]) #steps above seem to be fine
+```
+
+```{r}
+cleanDTM <- cleanCorpus %>% DocumentTermMatrix
+inspect(cleanDTM)
+```
+Before we can start modelling, we will split the data sets into train and test sets. We are using 80% of datasets for training, and 20% for test. 
+
+```{r}
+set.seed(1234)
+trainIndex <- createDataPartition(cleanDF$label, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+head(trainIndex)
+
+# Apply split indices to DF
+trainDF <- cleanDF[trainIndex, ]
+testDF <- cleanDF[-trainIndex, ]
+
+# Apply split indices to Corpus
+trainCorpus <- cleanCorpus[trainIndex]
+testCorpus <- cleanCorpus[-trainIndex]
+
+# Apply split indices to DTM
+trainDTM <- cleanDTM[trainIndex, ]
+testDTM <- cleanDTM[-trainIndex, ]
+
+```
+
+### Eliminating Words with lower frequencies 
+
+```{r}
+freqwords <- cleanDTM %>% findFreqTerms(50)
+trainDTM <- DocumentTermMatrix(trainCorpus, list(dictionary = freqwords))
+testDTM <- DocumentTermMatrix(testCorpus, list(dictionary = freqwords))
+
+inspect(trainDTM)
+inspect(testDTM)
+
+```
+
+Another issue is that the Naive Bayes classifier is typically trained on categorical features. We now have numerical matrix with word counts. We will transform the counts into a factor that simply indicates whether the word appears in the document or not. We’ll first build our own function for this and then apply it to each column in the DTM.
+```{r}
+convert_counts <- function(x) {
+  x <- ifelse(x > 0, 1, 0) %>% 
+    factor(levels = c(0,1), labels = c("No", "Yes")) 
+}
+
+nColsDTM <- dim(trainDTM)[2]
+trainDTM <- apply(trainDTM, MARGIN = 2, convert_counts)
+testDTM <- apply(testDTM, MARGIN = 2, convert_counts)
+
+head(trainDTM[,1:10]) #this seems to be fine, added selected columns to avoid long texts
+```
+## Modeling and Evaluation
+
+Create the model 
+```{r}
+nbayesModel <-  naiveBayes(trainDTM, trainDF$label, laplace = 1)
+```
+
+```{r}
+predVec <- predict(nbayesModel, testDTM)
+```
+
+```{r}
+cm <- confusionMatrix(predVec, testDF$label, positive = "unreliable", dnn = c("Prediction", "True"))
+
+cm
+```
+The accuracy is 72% with a dataset consisting of 10.000 articles. This is not the greatest, however we have to keep in mind that we are scanning large texts for frequently used words in reliable and unreliable sources, finding good indicator words for reliable or unreliable texts is quite hard.
+
+
+## Visualization of Confusion Matrix 
+```{r Chart Visualization }
+#Nice addition!
+
+table <- as.data.frame(cm$table)
+
+plotTable <- table %>%
+  mutate(goodbad = ifelse(table$Prediction == table$True, "good", "bad")) %>%
+  group_by(True) %>%
+  mutate(prop = Freq/sum(Freq))
+
+ggplot(data = plotTable, mapping = aes(x = True, y = Prediction, fill = goodbad, alpha = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), vjust = .5, fontface  = "bold", alpha = 1) +
+  scale_fill_manual(values = c(good = "green", bad = "red")) +
+  theme_bw() +
+  xlim(rev(levels(table$True))) +
+  theme(axis.text.y = element_text(angle=90, hjust=0.5))
+  
+```
+
+End
