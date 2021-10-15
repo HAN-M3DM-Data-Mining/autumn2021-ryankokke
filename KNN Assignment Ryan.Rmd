@@ -1,0 +1,116 @@
+---
+title: "Assigment - kNN DIY"
+author:
+  - Ryan Kokke - Author
+  - Audrya Kerenhappukh - Reviewer         
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+   html_notebook:
+    toc: true
+    toc_depth: 2
+---
+
+
+```{r}
+library(tidyverse)
+library(googlesheets4)
+library(class)
+library(caret)
+```
+
+---
+
+For this assignment a dataset containing laboratory values of blood donors and Hepatitis C patients and demographic values like age was used to train a kNN model. For the training of this set the CRISP-DM model was used, as can be seen below. More information about the dataset can be found here:
+[KNN-occupancy.csv](https://archive.ics.uci.edu/ml/datasets/Occupancy+Detection+) 
+
+## Business Understanding
+text and code here
+
+## Data Understanding
+The data used comes from UCI Machine Learning Repository and can be found online as an open source dataset ([UCI Machine Learning Repository: HCV Data Set](https://archive.ics.uci.edu/ml/datasets/Occupancy+Detection+)). This dataset was created by R. Lichtinghagen, F. Klawonn & G. Hoffmann. The dataset contains laboratory values of blood donors and Hepatitis C patients and demographic values like age. The dataset has 14 variables (columns) and 569 observations (rows).  
+
+
+```{r}
+str(RawData)
+```
+
+## Data Preparation
+To create a clean training set a new dataset was created.
+
+```{r}
+CleanDF<-RawData[-1]
+head(CleanDF)
+```
+
+Next, the non-relevant variables, such as the variable 'X', were deleted from the newly created dataset. 
+
+The variable named 'Category' contains the outcome to predict - '0' for 'Blood Donor', '0s' for 'Suspect Blood Donor' and '1','2' & '3' for 'Hepatitis C patients'.
+
+```{r}
+cntDiag <- table(CleanDF$Category)
+propDiag <- round(prop.table(cntDiag) * 100 , digits = 1)
+
+cntDiag
+```
+As can be seen, there are five categories while we only want to predict if someone is a blood donor or a Hepatitis C patient. To clean this column or attribute in the training set we can transform the data in this column:
+
+```{r}
+CleanDF$Category <- factor(CleanDF$Category, levels = c("0=Blood Donor","0s=suspect Blood Donor", "1=Hepatitis", "2=Fibrosis", "3=Cirrhosis"), labels = c("Blood Donor", "Blood Donor", "Hepatitis C", "Hepatitis C", "Hepatitis C"))
+head(CleanDF, 10)
+```
+Now lets also look at the missing values, to check if any column has missing values we can use the following command:
+
+```{r}
+CleanDF %>% map(~sum(is.na(.)))
+```
+After running this command it shows that the columns ALB, ALP, ALT, CHOL and PROT have missing values or na (not avalaible) as a value. Lets delete the rows with the missing values to create a clean dataset. 
+
+```{r}
+CleanDF_omit <- drop_na(CleanDF)
+CleanDF_omit
+```
+
+Next up the values in the columns have to be normalized
+
+
+```{r}
+
+normalize <- function(x) { 
+  return((x - min(x)) / (max(x) - min(x))) 
+}
+
+CleanDF_norm<-as.data.frame(lapply(CleanDF_omit[4:13], normalize))
+
+CleanDF_3<-subset(CleanDF_omit,select=-c(2:13))
+
+CleanDF_n<-cbind(CleanDF_3,CleanDF_norm)
+
+head(CleanDF_n)
+
+```
+```{r}
+set.seed(38)
+
+rows<-sample(nrow(CleanDF_n))
+
+RandomDF<-CleanDF_n[rows, ]
+
+head(RandomDF)
+```
+
+
+```{r}
+trainDF_feat <- RandomDF[1:471, -1]
+testDF_feat <- RandomDF[472:589, -1]
+
+trainDF_labels <- as.data.frame(RandomDF[1:471, 1])
+testDF_labels <- as.data.frame(RandomDF[472:589, 1])
+```
+
+```{r}
+cleanDF_test_pred <- knn(train = as.matrix(trainDF_feat), test = as.matrix(testDF_feat), cl = as.matrix(trainDF_labels), k = 21)
+head(cleanDF_test_pred)
+```
+```{r}
+confusionMatrix(cleanDF_test_pred, testDF_labels[[1]], positive = NULL, dnn = c("Prediction", "True"))
+```
